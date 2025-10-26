@@ -21,6 +21,7 @@ BENCH = "deepcopy"
 # === COLORS ===
 GREEN = "\033[92m"
 RED = "\033[91m"
+YELLOW = "\033[93m"
 BOLD = "\033[1m"
 RESET = "\033[0m"
 
@@ -141,17 +142,40 @@ def compare_pyperf(base, opt):
 
 def compare_perf(base_perf, opt_perf):
     print("\n📊 PERF Comparison (deepcopy microbenchmark):")
-    all_keys = sorted(set(base_perf.keys()) | set(opt_perf.keys()))
-    for key in all_keys:
-        b = base_perf.get(key, 0)
-        o = opt_perf.get(key, 0)
+
+    def safe_div(a, b): return a / b if b != 0 else 0
+
+    base_branch_rate = safe_div(base_perf.get("branch-misses", 0), base_perf.get("branches", 1))
+    opt_branch_rate = safe_div(opt_perf.get("branch-misses", 0), opt_perf.get("branches", 1))
+    base_cache_rate = safe_div(base_perf.get("cache-misses", 0), base_perf.get("cache-references", 1))
+    opt_cache_rate = safe_div(opt_perf.get("cache-misses", 0), opt_perf.get("cache-references", 1))
+
+    results = {
+        "instructions": (base_perf.get("instructions", 0), opt_perf.get("instructions", 0)),
+        "branch-miss rate": (base_branch_rate, opt_branch_rate),
+        "cache-miss rate": (base_cache_rate, opt_cache_rate)
+    }
+
+    for key, (b, o) in results.items():
         if b == 0:
             continue
         improvement = (b - o) / b * 100
         better = improvement > 0
-        color = GREEN if better else RED
-        sign = "✅ Improved" if better else "❌ Worse"
-        print(f"{color}{sign:12} {key:15}: {b:,} → {o:,} ({improvement:+.2f}%){RESET}")
+        if abs(improvement) < 1:
+            color, sign = YELLOW, "≈ NO CHANGE"
+        else:
+            color = GREEN if better else RED
+            sign = "✅ IMPROVED" if better else "❌ REGRESSED"
+
+        if "rate" in key:
+            b_fmt, o_fmt = f"{b*100:.3f}%", f"{o*100:.3f}%"
+        else:
+            b_fmt, o_fmt = f"{b:,}", f"{o:,}"
+
+        print(f"{color}{sign:12} {key:18}: {b_fmt:>12} → {o_fmt:>12} ({improvement:+.2f}%){RESET}")
+
+    print(f"\nℹ️  (Note: only rates and instruction count are compared — "
+          f"absolute event counts are omitted for fair analysis.)")
 
 
 def test_deepcopy_correctness(python_path: Path):
@@ -161,7 +185,6 @@ def test_deepcopy_correctness(python_path: Path):
     test_code = r"""
 import copy
 
-# --- Define diverse and composite test data ---
 data = {
     "simple_list": [1, 2, [3, 4]],
     "nested_dict": {"a": 10, "b": {"c": 20, "d": [1, 2, 3]}},
@@ -173,40 +196,25 @@ data = {
     ],
     "empty_structs": {"list": [], "tuple": (), "dict": {}}
 }
-
-# Add self-reference to test memoization correctness
 data["self"] = data
-
-# Perform deepcopy using the optimized implementation
 clone = copy.deepcopy(data)
-
-# --- 1) Ensure distinct identity ---
 assert id(clone) != id(data)
-
-# --- 2) Ensure structural equality (excluding self-reference) ---
 data_no_self = {k: v for k, v in data.items() if k != "self"}
 clone_no_self = {k: v for k, v in clone.items() if k != "self"}
 assert clone_no_self == data_no_self
-
-# --- 3) Ensure independence of mutable elements ---
 clone["simple_list"][2][0] = 999
 clone["nested_dict"]["b"]["d"][1] = 777
 clone["tuple_mix"][1][0] = 555
 clone["composite"][0]["inner"]["k"] = (8, 8)
 clone["empty_structs"]["list"].append("x")
-
-# Verify original remains unchanged
 assert data["simple_list"][2][0] == 3
 assert data["nested_dict"]["b"]["d"][1] == 2
 assert data["tuple_mix"][1][0] == 2
 assert data["composite"][0]["inner"]["k"] == (1, 2)
 assert data["empty_structs"]["list"] == []
-
-# --- 4) Ensure self-reference preserved correctly ---
 assert clone["self"] is clone
 assert data["self"] is data
-
-print("✅ deepcopy correctness verified successfully across all test cases!")
+print("✅ deepcopy correctness verified successfully!")
 """
 
     result = subprocess.run(
@@ -224,7 +232,6 @@ print("✅ deepcopy correctness verified successfully across all test cases!")
 
 
 def main():
-    # === Handle test-only mode ===
     if len(sys.argv) >= 3 and sys.argv[1] == "--test-only":
         python_path = Path(sys.argv[2])
         if not python_path.exists():
@@ -233,7 +240,6 @@ def main():
         test_deepcopy_correctness(python_path)
         sys.exit(0)
 
-    # === BASELINE BUILD ===
     print("🏗️  Building baseline version...")
     base_dir = extract_tarball()
     base_python = build_python(base_dir)
@@ -246,7 +252,6 @@ def main():
     print("🧹 Cleaning up baseline build...")
     subprocess.run(["rm", "-rf", str(base_dir)])
 
-    # === OPTIMIZED BUILD ===
     print("\n🏗️  Building optimized version...")
     subprocess.run(["rm", "-rf", "cpython-3.10.12"])
     opt_dir = extract_tarball()
@@ -262,10 +267,8 @@ def main():
     opt_time = parse_pyperf_time(OPT_JSON)
     run_microbenchmark_perf(opt_python, OPT_PERF)
 
-    # ✅ Verify correctness before comparing results
     test_deepcopy_correctness(opt_python)
 
-    # === COMPARISON ===
     compare_pyperf(base_time, opt_time)
     compare_perf(parse_perf_stat(BASELINE_PERF), parse_perf_stat(OPT_PERF))
 
