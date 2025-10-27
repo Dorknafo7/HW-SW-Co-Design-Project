@@ -1,0 +1,25 @@
+# started on Sat Oct 25 16:34:53 2025
+
+
+ Performance counter stats for 'python3-dbg -m pyperformance run --bench json_dumps':
+
+       91219917563      cycles                                                        (62.70%)
+      167287865175      instructions              #    1.83  insn per cycle           (75.10%)
+       35540658013      branches                                                      (75.06%)
+         335263393      branch-misses             #    0.94% of all branches          (75.05%)
+         728929429      cache-references                                              (75.10%)
+          17259734      cache-misses              #    2.368 % of all cache refs      (75.25%)
+       41369982094      L1-dcache-loads                                               (50.15%)
+         871863987      L1-dcache-load-misses     #    2.11% of all L1-dcache accesses  (50.14%)
+   <not supported>      LLC-loads                                                   
+   <not supported>      LLC-load-misses                                             
+              6420      context-switches                                            
+                 0      cpu-migrations                                              
+            323550      page-faults                                                 
+
+      39.912568058 seconds time elapsed
+
+      35.549904000 seconds user
+       1.636498000 seconds sys
+
+
