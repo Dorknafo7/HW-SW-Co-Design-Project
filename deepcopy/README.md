@@ -10,7 +10,7 @@ This repository contains the code and build scripts used to run the **deepcopy**
 .
 ├── flame_graphs/                # Contains flame graphs of the baseline and optimized versions
 ├── src/                         # Contains all files required to reproduce the benchmark:
-│   ├── build_and_benchmark_deepcopy.py   # Main automation script
+│   ├── script_deepcopy.py       # Main automation script
 │   ├── fastcopy.c                        # C-level optimization implementation
 │   ├── copy.py                           # Python-level interface calling optimized methods
 │   └── cpython-3.10.12.tar.xz            # Baseline CPython tarball used for building
@@ -45,15 +45,15 @@ If anything is missing in the QEMU image, install it there.
 
 3. **Make the main script executable (if needed)**
    ```bash
-   chmod +x build_and_benchmark_deepcopy.py
+   chmod +x script_deepcopy.py
    ```
 
 4. **Run the script**
    ```bash
-   ./build_and_benchmark_deepcopy.py
+   ./script_deepcopy.py
    ```
 
-## What the `build_and_benchmark_deepcopy.py` script does (high level)
+## What the `script_deepcopy.py` script does (high level)
 When you run the script from `src/`, it performs the following sequence automatically:
 
 1. **Extract CPython from the provided tarball**
