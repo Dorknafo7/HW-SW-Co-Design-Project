@@ -26,11 +26,11 @@ BOLD = "\033[1m"
 RESET = "\033[0m"
 
 
-def run(cmd, cwd=None, silent=False):
+def run(cmd, cwd=None, silent=False, check=True):
     """Run a shell command and handle errors gracefully."""
     print(f"🔹 Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=cwd, capture_output=silent, text=True)
-    if result.returncode != 0:
+    if check and result.returncode != 0:
         print("❌ Command failed:", " ".join(cmd))
         print(result.stderr)
         raise SystemExit(result.returncode)
@@ -38,6 +38,33 @@ def run(cmd, cwd=None, silent=False):
     if not silent:
         print(output)
     return output.strip() or None
+
+
+# === NEW ===
+def setup_environment():
+    """Ensure required system packages and Python modules exist."""
+    print("🧩 Checking and installing system dependencies...")
+
+    # Step 1: Fix possible held packages and upgrade zlib1g
+    run(["apt-get", "update"], silent=True)
+    run(["apt-mark", "unhold", "zlib1g"], silent=True, check=False)
+    run(["apt-get", "install", "-y", "zlib1g=1:1.2.11.dfsg-2ubuntu9.2"], silent=True, check=False)
+    run([
+        "apt-get", "install", "-y",
+        "zlib1g-dev", "libffi-dev", "libssl-dev", "build-essential", "libbz2-dev", "liblzma-dev", "perf"
+    ], silent=True, check=False)
+
+    # Step 2: Ensure pip and pyperformance are available in system Python
+    try:
+        subprocess.run(["python3", "-m", "pyperformance", "--version"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    except subprocess.CalledProcessError:
+        print("📦 Installing pyperformance (system-wide)...")
+        run(["apt-get", "install", "-y", "python3-pip"], silent=True, check=False)
+        run(["python3", "-m", "pip", "install", "--upgrade", "pip"], silent=True, check=False)
+        run(["python3", "-m", "pip", "install", "pyperformance"], silent=False, check=True)
+
+    print("✅ Environment ready!\n")
 
 
 def extract_tarball():
@@ -232,6 +259,8 @@ print("✅ deepcopy correctness verified successfully!")
 
 
 def main():
+    setup_environment()  # automatic zlib + pyperformance setup
+
     if len(sys.argv) >= 3 and sys.argv[1] == "--test-only":
         python_path = Path(sys.argv[2])
         if not python_path.exists():
@@ -268,7 +297,6 @@ def main():
     run_microbenchmark_perf(opt_python, OPT_PERF)
 
     test_deepcopy_correctness(opt_python)
-
     compare_pyperf(base_time, opt_time)
     compare_perf(parse_perf_stat(BASELINE_PERF), parse_perf_stat(OPT_PERF))
 
