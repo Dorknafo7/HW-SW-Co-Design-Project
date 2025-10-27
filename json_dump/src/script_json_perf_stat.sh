@@ -25,7 +25,7 @@ echo
 echo "=== OPTIMIZED: orjson ==="
 
 # Ensure orjson is available
-python3-dbg -m pip install --user orjson >/dev/null 2>&1 || true
+sudo python3-dbg -m pip install --user orjson >/dev/null 2>&1 || true
 
 # Monkey-patch json.dumps to use orjson.dumps
 PATCHDIR=$(mktemp -d)
