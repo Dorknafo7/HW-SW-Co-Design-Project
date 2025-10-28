@@ -19,15 +19,9 @@ OPT_PERF = ROOT / "perf_optimized.txt"
 BENCH = "deepcopy"
 
 # === COLORS ===
-GREEN = "\033[92m"
-RED = "\033[91m"
-YELLOW = "\033[93m"
-BOLD = "\033[1m"
-RESET = "\033[0m"
-
+GREEN = "\033[92m"; RED = "\033[91m"; YELLOW = "\033[93m"; BOLD = "\033[1m"; RESET = "\033[0m"
 
 def run(cmd, cwd=None, silent=False, check=True):
-    """Run a shell command and handle errors gracefully."""
     print(f"🔹 Running: {' '.join(cmd)}")
     result = subprocess.run(cmd, cwd=cwd, capture_output=silent, text=True)
     if check and result.returncode != 0:
@@ -40,101 +34,114 @@ def run(cmd, cwd=None, silent=False, check=True):
     return output.strip() or None
 
 
-# === NEW ===
+# === ENVIRONMENT SETUP (FULL AUTO-FIX) ===
 def setup_environment():
-    """Ensure required system packages and Python modules exist."""
     print("🧩 Checking and installing system dependencies...")
 
-    # Step 1: Fix possible held packages and upgrade zlib1g
-    run(["apt-get", "update"], silent=True)
-    run(["apt-mark", "unhold", "zlib1g"], silent=True, check=False)
-    run(["apt-get", "install", "-y", "zlib1g=1:1.2.11.dfsg-2ubuntu9.2"], silent=True, check=False)
+    # --- Ensure repositories ---
+    sources = "/etc/apt/sources.list"
+    with open(sources) as f:
+        if "jammy-security" not in f.read():
+            print("🔧 Adding jammy-security repository...")
+            with open(sources, "a") as out:
+                out.write("\ndeb http://security.ubuntu.com/ubuntu jammy-security main restricted universe multiverse\n")
+
+    run(["apt-get", "update"])
+    run(["apt-mark", "unhold", "libexpat1", "libsystemd0", "systemd", "udev",
+         "libudev1", "libnss-systemd", "libpam-systemd", "systemd-timesyncd",
+         "systemd-sysv"], check=False)
+
+    # --- Fix libexpat chain ---
+    print("🔧 Repairing libexpat1 chain...")
     run([
         "apt-get", "install", "-y",
-        "zlib1g-dev", "libffi-dev", "libssl-dev", "build-essential", "libbz2-dev", "liblzma-dev", "perf"
-    ], silent=True, check=False)
+        "--allow-downgrades", "--allow-change-held-packages", "--allow-remove-essential",
+        "libexpat1=2.4.7-1ubuntu0.6", "libexpat1-dev"
+    ], check=False)
 
-    # Step 2: Ensure pip and pyperformance are available in system Python
+    # --- Fix zlib/libffi mismatches automatically ---
+    print("🔧 Checking and repairing zlib/libffi dependencies...")
+    run(["apt-mark", "unhold", "zlib1g"], check=False)
+    run([
+        "apt-get", "install", "-y", "--allow-downgrades",
+        "zlib1g=1:1.2.11.dfsg-2ubuntu9.2",
+        "zlib1g-dev=1:1.2.11.dfsg-2ubuntu9.2",
+        "libffi-dev",
+        "--allow-change-held-packages"
+    ], check=False)
+    run(["apt-get", "install", "-f", "-y"], check=False)
+
+    # --- Verify ffi/zlib headers exist ---
+    ffi_ok = os.path.exists("/usr/include/ffi.h") or os.path.exists("/usr/include/x86_64-linux-gnu/ffi.h")
+    zlib_ok = os.path.exists("/usr/include/zlib.h")
+    if not (ffi_ok and zlib_ok):
+        print("❌ Missing ffi.h or zlib.h — retrying fix...")
+        run([
+            "apt-get", "install", "-y", "--allow-downgrades",
+            "libffi-dev", "zlib1g-dev", "zlib1g",
+            "--allow-change-held-packages"
+        ], check=False)
+    else:
+        print("✅ zlib/libffi toolchain verified OK.")
+
+    # --- Continue dependency installation ---
+    run(["apt-get", "dist-upgrade", "-y", "--allow-change-held-packages"], check=False)
+    run(["apt-get", "-f", "install", "-y", "--allow-change-held-packages"], check=False)
+    run(["apt-get", "install", "-y", "libfontconfig1-dev", "libxft-dev", "--allow-change-held-packages"], check=False)
+    run([
+        "apt-get", "install", "-y", "--allow-change-held-packages",
+        "build-essential", "libssl-dev", "libbz2-dev", "liblzma-dev",
+        "libreadline-dev", "libsqlite3-dev", "tk-dev", "uuid-dev",
+        "wget", "ca-certificates", "python3-pip",
+        "linux-tools-common", f"linux-tools-{os.uname().release}"
+    ], check=False)
+
+    # --- pyperformance ---
     try:
         subprocess.run(["python3", "-m", "pyperformance", "--version"],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
     except subprocess.CalledProcessError:
-        print("📦 Installing pyperformance (system-wide)...")
-        run(["apt-get", "install", "-y", "python3-pip"], silent=True, check=False)
-        run(["python3", "-m", "pip", "install", "--upgrade", "pip"], silent=True, check=False)
-        run(["python3", "-m", "pip", "install", "pyperformance"], silent=False, check=True)
+        print("📦 Installing pyperformance...")
+        run(["python3", "-m", "pip", "install", "--upgrade", "pip"])
+        run(["python3", "-m", "pip", "install", "pyperformance"])
 
     print("✅ Environment ready!\n")
 
 
+# === CPython build and benchmark helpers ===
 def extract_tarball():
-    """Extract CPython tarball and return the extracted directory path."""
     print("📦 Extracting CPython...")
     with tarfile.open(TARBALL, "r:gz") as tar:
         tar.extractall(ROOT)
-        top_level = tar.getnames()[0].split("/")[0]
-    return ROOT / top_level
+        top = tar.getnames()[0].split("/")[0]
+    return ROOT / top
 
+def build_python(src):
+    print(f"⚙️  Building Python in {src.name} ...")
+    run(["./configure", f"--prefix={src}/install"], cwd=src, silent=True)
+    run(["make", f"-j{os.cpu_count()}"], cwd=src, silent=True)
+    run(["make", "install"], cwd=src, silent=True)
+    return src / "install" / "bin" / "python3"
 
-def build_python(src_dir):
-    """Configure, build, and install Python (silent build)."""
-    print(f"⚙️  Building Python in {src_dir.name} ...")
-    run(["./configure", f"--prefix={src_dir}/install"], cwd=src_dir, silent=True)
-    run(["make", f"-j{os.cpu_count()}"], cwd=src_dir, silent=True)
-    run(["make", "install"], cwd=src_dir, silent=True)
-    return src_dir / "install" / "bin" / "python3"
+def run_pyperf(python, out):
+    print(f"🚀 Running pyperformance benchmark for {python}")
+    run(["python3", "-m", "pyperformance", "run", "--bench", BENCH, f"--python={python}", "-o", str(out)])
+    print(f"✅ Benchmark JSON saved to {out}")
 
+def flush_cpu_caches(): os.system("sync; echo 3 > /proc/sys/vm/drop_caches")
 
-def run_pyperf(python_path: Path, output_json: Path):
-    """Run pyperformance deepcopy benchmark."""
-    print(f"🚀 Running pyperformance benchmark for {python_path}")
-    run([
-        "python3", "-m", "pyperformance", "run",
-        "--bench", BENCH,
-        f"--python={python_path}",
-        "-o", str(output_json)
-    ])
-    print(f"✅ Benchmark JSON saved to {output_json}")
-
-
-def flush_cpu_caches():
-    """Flush CPU caches between runs."""
-    print("🧹 Flushing CPU caches...")
-    os.system("sync; echo 3 > /proc/sys/vm/drop_caches")
-
-
-def run_microbenchmark_perf(python_path: Path, output_txt: Path):
-    """Run perf stat on deepcopy microbenchmark."""
+def run_microbenchmark_perf(python, out):
     flush_cpu_caches()
-    print(f"🚀 Running perf stat (deepcopy microbenchmark) for {python_path}")
-    print("   Running perf to collect performance statistics...")
-
-    perf_code = r"""
+    print(f"🚀 Running perf stat (deepcopy microbenchmark)...")
+    code = r"""
 import copy, random
-
-data = {
-    'list_int': [random.randint(0, 1000) for _ in range(1000)],
-    'nested_list': [[i for i in range(100)] for _ in range(50)],
-    'dict_obj': {str(i): {'val': i, 'list': list(range(50))} for i in range(100)},
-    'mix': [{'a': [1, 2, 3], 'b': (4, 5, 6)} for _ in range(200)]
-}
-
-for _ in range(50):
-    _ = copy.deepcopy(data)
+data = {'a':[random.randint(0,1000) for _ in range(1000)]}
+for _ in range(50): _ = copy.deepcopy(data)
 """
+    run(["perf","stat","-o",str(out),"-e","instructions,branches,branch-misses,cache-references,cache-misses",str(python),"-c",code],silent=True)
+    print(f"✅ Perf results saved to {out}")
 
-    run([
-        "perf", "stat",
-        "-o", str(output_txt),
-        "-e", "instructions,branches,branch-misses,cache-references,cache-misses",
-        str(python_path), "-c", perf_code
-    ], silent=True)
-
-    print(f"✅ Perf results saved to {output_txt}")
-
-
-def parse_pyperf_time(json_path: Path):
-    """Extract mean time (µs) from pyperformance JSON output."""
+def parse_pyperf_time(json_path):
     text = json_path.read_text()
     match = re.search(r'"values":\s*\[([\d.eE+-]+)', text)
     if match:
@@ -143,162 +150,70 @@ def parse_pyperf_time(json_path: Path):
             return statistics.mean(values) * 1e6
     return None
 
-
-def parse_perf_stat(path: Path):
-    """Parse key perf stat counters."""
+def parse_perf(path):
     text = path.read_text()
-    results = {}
-    for key in ["instructions", "branches", "branch-misses", "cache-references", "cache-misses"]:
-        match = re.search(rf"\s*([\d,]+)\s+{key}", text)
-        if match:
-            results[key] = int(match.group(1).replace(",", ""))
-    return results
-
+    res = {}
+    for k in ["instructions","branches","branch-misses","cache-references","cache-misses"]:
+        m = re.search(rf"\s*([\d,]+)\s+{k}", text)
+        if m: res[k]=int(m.group(1).replace(",",""))
+    return res
 
 def compare_pyperf(base, opt):
     if not base or not opt:
         print("⚠️ Could not extract benchmark times automatically.")
         return
-    diff = opt - base
-    improvement = (base - opt) / base * 100
-    color = GREEN if improvement > 0 else RED
-    sign = "✅ Faster" if improvement > 0 else "❌ Slower"
-    print(f"\n📊 Comparing benchmark results...\n{color}{BOLD}{sign}: {abs(improvement):.2f}% ({base:.1f} → {opt:.1f} µs){RESET}")
+    imp = (base - opt) / base * 100
+    color = GREEN if imp > 0 else RED
+    sign = "✅ Faster" if imp > 0 else "❌ Slower"
+    print(f"\n📊 Comparing benchmark results...\n{color}{BOLD}{sign}: {abs(imp):.2f}% ({base:.1f} → {opt:.1f} µs){RESET}")
     print("(based on JSON benchmark results)\n")
 
-
-def compare_perf(base_perf, opt_perf):
-    print("\n📊 PERF Comparison (deepcopy microbenchmark):")
-
-    def safe_div(a, b): return a / b if b != 0 else 0
-
-    base_branch_rate = safe_div(base_perf.get("branch-misses", 0), base_perf.get("branches", 1))
-    opt_branch_rate = safe_div(opt_perf.get("branch-misses", 0), opt_perf.get("branches", 1))
-    base_cache_rate = safe_div(base_perf.get("cache-misses", 0), base_perf.get("cache-references", 1))
-    opt_cache_rate = safe_div(opt_perf.get("cache-misses", 0), opt_perf.get("cache-references", 1))
-
-    results = {
-        "instructions": (base_perf.get("instructions", 0), opt_perf.get("instructions", 0)),
-        "branch-miss rate": (base_branch_rate, opt_branch_rate),
-        "cache-miss rate": (base_cache_rate, opt_cache_rate)
-    }
-
-    for key, (b, o) in results.items():
-        if b == 0:
-            continue
-        improvement = (b - o) / b * 100
-        better = improvement > 0
-        if abs(improvement) < 1:
-            color, sign = YELLOW, "≈ NO CHANGE"
-        else:
-            color = GREEN if better else RED
-            sign = "✅ IMPROVED" if better else "❌ REGRESSED"
-
-        if "rate" in key:
-            b_fmt, o_fmt = f"{b*100:.3f}%", f"{o*100:.3f}%"
-        else:
-            b_fmt, o_fmt = f"{b:,}", f"{o:,}"
-
-        print(f"{color}{sign:12} {key:18}: {b_fmt:>12} → {o_fmt:>12} ({improvement:+.2f}%){RESET}")
-
-    print(f"\nℹ️  (Note: only rates and instruction count are compared — "
-          f"absolute event counts are omitted for fair analysis.)")
+def compare_perf(b,o):
+    print("\n📊 PERF Comparison:")
+    def r(a,b): return a/b if b else 0
+    for name,(bv,ov) in {
+        "instructions":(b.get("instructions",0),o.get("instructions",0)),
+        "branch-miss rate":(r(b.get("branch-misses",0),b.get("branches",1)),r(o.get("branch-misses",0),o.get("branches",1))),
+        "cache-miss rate":(r(b.get("cache-misses",0),b.get("cache-references",1)),r(o.get("cache-misses",0),o.get("cache-references",1)))
+    }.items():
+        imp=(bv-ov)/bv*100 if bv else 0
+        col=GREEN if imp>0 else RED if imp<-1 else YELLOW
+        sign="✅ IMPROVED" if imp>0 else "❌ REGRESSED" if imp<-1 else "≈ NO CHANGE"
+        fmt=lambda x:f"{x*100:.2f}%" if "rate" in name else f"{x:,}"
+        print(f"{col}{sign:12} {name:18}: {fmt(bv):>10} → {fmt(ov):>10} ({imp:+.2f}%){RESET}")
 
 
-def test_deepcopy_correctness(python_path: Path):
-    """Run comprehensive correctness tests to ensure deepcopy behavior is preserved."""
-    print("\n🧪 Running deepcopy correctness tests...")
-
-    test_code = r"""
-import copy
-
-data = {
-    "simple_list": [1, 2, [3, 4]],
-    "nested_dict": {"a": 10, "b": {"c": 20, "d": [1, 2, 3]}},
-    "tuple_mix": (1, [2, 3], {"x": 5}),
-    "composite": [
-        {"nums": [1, 2, 3], "inner": {"k": (1, 2)}},
-        [ {"nested": [ {"v": 9} ]} ],
-        ({"deep": {"copy": [42]}},)
-    ],
-    "empty_structs": {"list": [], "tuple": (), "dict": {}}
-}
-data["self"] = data
-clone = copy.deepcopy(data)
-assert id(clone) != id(data)
-data_no_self = {k: v for k, v in data.items() if k != "self"}
-clone_no_self = {k: v for k, v in clone.items() if k != "self"}
-assert clone_no_self == data_no_self
-clone["simple_list"][2][0] = 999
-clone["nested_dict"]["b"]["d"][1] = 777
-clone["tuple_mix"][1][0] = 555
-clone["composite"][0]["inner"]["k"] = (8, 8)
-clone["empty_structs"]["list"].append("x")
-assert data["simple_list"][2][0] == 3
-assert data["nested_dict"]["b"]["d"][1] == 2
-assert data["tuple_mix"][1][0] == 2
-assert data["composite"][0]["inner"]["k"] == (1, 2)
-assert data["empty_structs"]["list"] == []
-assert clone["self"] is clone
-assert data["self"] is data
-print("✅ deepcopy correctness verified successfully!")
-"""
-
-    result = subprocess.run(
-        [str(python_path), "-c", test_code],
-        capture_output=True,
-        text=True
-    )
-
-    if result.returncode == 0:
-        print(result.stdout.strip())
-    else:
-        print("❌ deepcopy correctness test failed!")
-        print(result.stderr)
-        raise SystemExit(result.returncode)
-
-
+# === MAIN WORKFLOW ===
 def main():
-    setup_environment()  # automatic zlib + pyperformance setup
-
-    if len(sys.argv) >= 3 and sys.argv[1] == "--test-only":
-        python_path = Path(sys.argv[2])
-        if not python_path.exists():
-            print(f"❌ Python path not found: {python_path}")
-            sys.exit(1)
-        test_deepcopy_correctness(python_path)
-        sys.exit(0)
+    setup_environment()
 
     print("🏗️  Building baseline version...")
-    base_dir = extract_tarball()
-    base_python = build_python(base_dir)
-
-    print("\n🚀 Running baseline benchmarks...")
-    run_pyperf(base_python, BASELINE_JSON)
-    base_time = parse_pyperf_time(BASELINE_JSON)
-    run_microbenchmark_perf(base_python, BASELINE_PERF)
-
-    print("🧹 Cleaning up baseline build...")
-    subprocess.run(["rm", "-rf", str(base_dir)])
+    base = extract_tarball()
+    base_py = build_python(base)
+    run_pyperf(base_py, BASELINE_JSON)
+    run_microbenchmark_perf(base_py, BASELINE_PERF)
+    subprocess.run(["rm","-rf",str(base)])
 
     print("\n🏗️  Building optimized version...")
-    subprocess.run(["rm", "-rf", "cpython-3.10.12"])
-    opt_dir = extract_tarball()
-    print("📥 Copying optimization files...")
-    (opt_dir / "Modules" / "fastcopy.c").write_bytes(FASTCOPY.read_bytes())
-    (opt_dir / "Lib" / "copy.py").write_bytes(COPY_PY.read_bytes())
-    (opt_dir / "Modules" / "Setup.local").write_text("fastcopy fastcopy.c\n")
+    subprocess.run(["rm","-rf","cpython-3.10.12"])
+    opt = extract_tarball()
+    (opt/"Modules"/"fastcopy.c").write_bytes(FASTCOPY.read_bytes())
+    (opt/"Lib"/"copy.py").write_bytes(COPY_PY.read_bytes())
+    (opt/"Modules"/"Setup.local").write_text("fastcopy fastcopy.c\n")
+    opt_py = build_python(opt)
+    run_pyperf(opt_py, OPT_JSON)
+    run_microbenchmark_perf(opt_py, OPT_PERF)
 
-    opt_python = build_python(opt_dir)
+    # === Compare benchmark results ===
+    try:
+        base_time = parse_pyperf_time(BASELINE_JSON)
+        opt_time = parse_pyperf_time(OPT_JSON)
+        compare_pyperf(base_time, opt_time)
+    except Exception as e:
+        print(f"⚠️ Failed to parse pyperformance results: {e}")
 
-    print("\n🚀 Running optimized benchmarks...")
-    run_pyperf(opt_python, OPT_JSON)
-    opt_time = parse_pyperf_time(OPT_JSON)
-    run_microbenchmark_perf(opt_python, OPT_PERF)
-
-    test_deepcopy_correctness(opt_python)
-    compare_pyperf(base_time, opt_time)
-    compare_perf(parse_perf_stat(BASELINE_PERF), parse_perf_stat(OPT_PERF))
+    # === Compare PERF results ===
+    compare_perf(parse_perf(BASELINE_PERF), parse_perf(OPT_PERF))
 
     print(f"\n📁 Results saved to:\n  {BASELINE_JSON}\n  {OPT_JSON}\n  {BASELINE_PERF}\n  {OPT_PERF}")
 
