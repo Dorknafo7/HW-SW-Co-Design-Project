@@ -1,0 +1,19 @@
+Use of AI Tools
+
+During the project, ChatGPT was used as a technical assistant for automating repetitive setup tasks, verifying correctness, improving presentation clarity, and refining project documentation.
+All AI-generated outputs were reviewed, tested, and validated manually before inclusion in the final submission.
+Furthermore, all performance analysis, data interpretation, and conclusions presented in the report were performed entirely by us — the AI was used only for linguistic refinement and formatting of our own findings.
+
+Some examples:
+
+Automation Script Setup:
+“Write a fully automated Python script that builds CPython from source, installs missing dependencies automatically (including zlib, ffi, and expat), runs the deepcopy benchmark from pyperformance, and compares baseline vs optimized versions.”
+
+Correctness Validation:
+“Create a short Python snippet that tests deep copy correctness for complex nested data structures, including self-references, to verify my optimized implementation behaves identically to the baseline.”
+
+README and Documentation Writing:
+“Rewrite my README file so it clearly explains how to run the script end-to-end, mentions the automatic dependency repair, and includes a note about pressing Enter when the package configuration dialog appears.”
+
+Benchmark Comparison Formatting:
+“Format the console output comparison between baseline and optimized runs in color-coded style (green for improvement, red for regression) with clear percentage differences.”
