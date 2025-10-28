@@ -1,74 +1,99 @@
 # HW-SW Co-Design Project
 
 ## Overview
-This repository contains the code and build scripts used to run the **deepcopy** benchmark comparisons on an unmodified (baseline) CPython and on an optimized variant that uses `fastcopy.c`. The README below describes the (high-level) repository layout and how to run the benchmark workflow end-to-end inside the provided QEMU image.
+This repository contains the code and build scripts used to run the **deepcopy** benchmark comparisons on an unmodified (baseline) CPython and on an optimized variant that uses `fastcopy.c`.  
+The README below describes the repository layout and explains how to reproduce the benchmark workflow end-to-end inside the provided QEMU image.
 
-> **Note:** everything needed to run the benchmark is under `src/`. You do **not** need to manually move other files from the repo to run the script — `src/` contains the build script, the CPython tarball reference, optimization source (e.g., `fastcopy.c`), and helper scripts.
+> **Note:** everything needed to run the benchmark is under `src/`.  
+> You do **not** need to manually move other files — the `src/` folder already contains the build script, the CPython tarball, the optimization source (`fastcopy.c`), and helper files.
+
+---
 
 ## Repository structure
 ```
 .
-├── flame_graphs/                # Contains flame graphs of the baseline and optimized versions
-├── src/                         # Contains all files required to reproduce the benchmark:
-│   ├── script_deepcopy.py       # Main automation script
-│   ├── fastcopy.c                        # C-level optimization implementation
-│   ├── copy.py                           # Python-level interface calling optimized methods
-│   └── cpython-3.10.12.tar.xz            # Baseline CPython tarball used for building
+├── flame_graphs/                 # Contains flame graphs of baseline and optimized runs
+├── src/
+│   ├── script_deepcopy.py        # Main automation script (full build & benchmark workflow)
+│   ├── fastcopy.c                # C-level optimization implementation
+│   ├── copy.py                   # Python-level interface calling the optimized method
+│   └── cpython-3.10.12.tar.gz    # Baseline CPython source tarball
 └── report_deepcopy.pdf           # Project report and analysis
 ```
 
+---
+
 ## Prerequisites
-Run the workflow **inside the QEMU image** provided by the faculty (the environment the faculty supplied). The script assumes a typical Linux build environment inside that QEMU image with the following tools installed:
+The entire workflow must be executed **inside the QEMU image** provided by the course staff.  
+The script assumes a standard Ubuntu-based environment with the following tools (installed automatically if missing):
 
-- `git`
-- `tar`
-- `make`, `gcc` (or toolchain required to build CPython)
-- `python` (host utilities) and Python dev headers if needed for building
-- `pyperformance` (or ability for the script to install/run it)
-- `perf` (Linux performance counters)
-- `bash` (for running the script)
-- Enough disk space for extracting and building CPython
+- `gcc`, `make`, `tar`, `wget`, `ca-certificates`
+- `python3` and `python3-pip`
+- `perf`
+- `pyperformance`
+- Basic system libraries (`libffi-dev`, `zlib1g-dev`, etc.)
 
-If anything is missing in the QEMU image, install it there.
+> The script automatically repairs broken dependencies and installs everything required, including fallback fixes for known issues with Ubuntu 22.04 (e.g., `zlib1g`, `libexpat1`, and `libffi-dev`).
 
-## How to run (step-by-step)
-1. **Clone the repo into the QEMU image**
+---
+
+## How to run
+
+1. **Clone the repository inside QEMU:**
    ```bash
    git clone https://github.com/Dorknafo7/HW-SW-Co-Design-Project.git
-   cd HW-SW-Co-Design-Project
+   cd HW-SW-Co-Design-Project/deepcopy/src/
    ```
 
-2. **Go into `src/`**
-   ```bash
-   cd src
-   ```
-
-3. **Make the main script executable (if needed)**
+2. **Make the script executable (if needed):**
    ```bash
    chmod +x script_deepcopy.py
    ```
 
-4. **Run the script**
+3. **Run it:**
    ```bash
    ./script_deepcopy.py
    ```
 
-## What the `script_deepcopy.py` script does (high level)
-When you run the script from `src/`, it performs the following sequence automatically:
+---
 
-1. **Extract CPython from the provided tarball**
-2. **Build the baseline CPython**
-3. **Run pyperformance and `perf` on the `deepcopy` benchmark**
-   - Saves results to files (e.g., baseline pyperf, perf data).
-4. **Clean the baseline build**
-5. **Apply optimization changes (e.g., enable `fastcopy.c`, modify `copy.py`)**
-6. **Rebuild CPython with optimizations**
-7. **Re-run pyperformance and `perf`**
-8. **Compare baseline vs optimized results and print a summary**
+## During the run (important)
 
-## Output / results
-After a successful run, the results contain:
-- Baseline and optimized pyperformance output
-- Baseline and optimized `perf` data
-- Generated flame graphs in `flame_graphs/`
-- Summary comparison printed to the console
+While installing dependencies, the system may briefly display an **interactive “Package configuration” screen**.
+
+This is a standard `apt` prompt asking which services should be restarted after library updates.
+
+> **Action required:**  
+> Simply press **Enter** (or **OK**) to continue.  
+> No manual selection is needed — pressing Enter proceeds safely with the installation.
+
+After that, the script continues automatically without further interaction.
+
+---
+
+## What the script does
+
+When you run `script_deepcopy.py`, it:
+
+1. **Auto-repairs the environment** (fixes broken or outdated system libraries).
+2. **Extracts and builds** a baseline CPython (unmodified).
+3. **Runs `pyperformance`** on the `deepcopy` benchmark and stores baseline results.
+4. **Runs `perf stat`** for low-level hardware metrics.
+5. **Cleans up** the baseline build.
+6. **Applies the optimization (`fastcopy.c`, `copy.py`).**
+7. **Rebuilds CPython** with the new optimization.
+8. **Re-runs benchmarks and `perf` measurements.**
+9. **Prints a detailed comparison** of both runs.
+
+---
+
+## Output
+After completion, the following files will be generated automatically:
+
+- `deepcopy_baseline.json` – pyperformance results for the baseline
+- `deepcopy_optimized.json` – pyperformance results for the optimized version
+- `perf_baseline.txt` – raw performance counters for baseline
+- `perf_optimized.txt` – raw performance counters for optimized
+- Comparison summary printed directly to the console
+
+All files are saved under `src/`.
