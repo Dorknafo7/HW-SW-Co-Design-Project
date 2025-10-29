@@ -26,11 +26,14 @@ if [[ "$SETUP_DBG" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
   export DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.ubuntu.com}"
 fi
 
-# ---- Ensure py-spy is available ----
+# ---- Ensure py-spy and orjson are available ----
 if ! command -v py-spy >/dev/null 2>&1; then
   echo "Installing py-spy..."
   pip install py-spy==0.3.14 --quiet
 fi
+
+echo "🧩 Ensuring orjson for flamegraph step..."
+python3 -m pip install --no-cache-dir --prefer-binary orjson==3.10.7 --quiet || true
 
 # ---- Generate deterministic payload ----
 python3 - <<'PY'
