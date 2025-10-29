@@ -1,17 +1,9 @@
 #!/usr/bin/env bash
-# Two native flame graphs with C speedups ON for stdlib json (like pyperformance) and orjson.
-# Usage:
-#   OUTDIR=flames PREFIX=runA_ RATE=150 DUR=25 bash json_orjson_native_flames.sh
-# Env knobs:
-#   RATE=150, DUR=25        # sampling rate and recording duration
-#   OUTDIR=flames_out       # where to write SVGs
-#   PREFIX=runA_            # filename prefix
-#   SETUP_DBG=1             # install python3-dbg/libc6-dbg to improve native stack depth (default 1)
+# Generate two native flame graphs (stdlib json vs orjson) using py-spy
 
 set -euo pipefail
 
-# ---- config (env) ----
-RATE="${RATE:-150}"                     # 120–200 is a good sweet spot on VMs
+RATE="${RATE:-150}"
 DUR="${DUR:-25}"
 OUTDIR="${OUTDIR:-FINAL_FGS_OUT}"
 PREFIX="${PREFIX:-}"
@@ -21,18 +13,26 @@ PFILE="${PFILE:-$OUTDIR/payloads.pkl}"
 mkdir -p "$OUTDIR"
 export PFILE DUR
 
-# ---- optional: improve native symbolization/unwinding ----
+# ---- Setup debug symbols (noninteractive, no restarts) ----
 if [[ "$SETUP_DBG" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
   if command -v sysctl >/dev/null 2>&1; then
     sudo sysctl -w kernel.perf_event_paranoid=1 >/dev/null || true
     sudo sysctl -w kernel.kptr_restrict=0 >/dev/null || true
   fi
-  sudo apt-get update -y >/dev/null || true
-  sudo apt-get install -y python3-dbg libc6-dbg elfutils >/dev/null || true
+  echo "🧩 Installing debug symbol packages..."
+  sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get update -y -o Dpkg::Use-Pty=0 >/dev/null || true
+  sudo DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt-get install -y \
+      python3-dbg libc6-dbg elfutils -o Dpkg::Use-Pty=0 >/dev/null || true
   export DEBUGINFOD_URLS="${DEBUGINFOD_URLS:-https://debuginfod.ubuntu.com}"
 fi
 
-# ---- deterministic payload shared by both runs ----
+# ---- Ensure py-spy is available ----
+if ! command -v py-spy >/dev/null 2>&1; then
+  echo "Installing py-spy..."
+  pip install py-spy==0.3.14 --quiet
+fi
+
+# ---- Generate deterministic payload ----
 python3 - <<'PY'
 import os, random, string, pickle
 path = os.environ.get("PFILE") or "flames_out/payloads.pkl"
@@ -49,36 +49,34 @@ with open(path,"wb") as f: pickle.dump(payloads,f,pickle.HIGHEST_PROTOCOL)
 print("Wrote payloads:", path, "count:", len(payloads))
 PY
 
-# ---- filenames ----
+# ---- Filenames ----
 STD_SVG="$OUTDIR/${PREFIX}json_stdlib_native.svg"
 ORJ_SVG="$OUTDIR/${PREFIX}orjson_native.svg"
 STD_OUT="$OUTDIR/${PREFIX}stdout_json_stdlib_native.txt"
 ORJ_OUT="$OUTDIR/${PREFIX}stdout_orjson_native.txt"
 REPORT="$OUTDIR/${PREFIX}iterations_report.txt"
 
-# ---- 1) stdlib json (C speedups ON; pyperformance-style). MUST use --native. ----
+# ---- 1) stdlib json ----
 py-spy record --native --rate "$RATE" --duration "$DUR" -o "$STD_SVG" -- \
 python3 -u - <<'PY' | tee "$STD_OUT"
 import json, time, pickle, os, sys, json.encoder as E
-# Self-check: confirm C speedups are active
 print("json C speedups active?", getattr(E, "c_make_encoder", None) is not None, file=sys.stderr)
 PFILE=os.environ["PFILE"]; DUR=float(os.environ.get("DUR","25"))
 with open(PFILE,"rb") as f: payloads=pickle.load(f)
 t0=time.time(); it=0; deadline=t0+DUR+2.0
 while time.time()<deadline:
     for p in payloads:
-        # Fair vs orjson: compact (no spaces), UTF-8
         json.dumps(p, separators=(",",":"), ensure_ascii=False)
         it+=1
 print("stdlib_native_iterations:", it)
 time.sleep(0.5)
 PY
 
-# ---- 2) orjson (native). Also shows native frames under the orjson .so. ----
+# ---- 2) orjson ----
 py-spy record --native --rate "$RATE" --duration "$DUR" -o "$ORJ_SVG" -- \
 python3 -u - <<'PY' | tee "$ORJ_OUT"
 import orjson, time, pickle, os, sys
-print("orjson module:", orjson.__file__, file=sys.stderr)  # where the .so comes from
+print("orjson module:", orjson.__file__, file=sys.stderr)
 PFILE=os.environ["PFILE"]; DUR=float(os.environ.get("DUR","25"))
 with open(PFILE,"rb") as f: payloads=pickle.load(f)
 t0=time.time(); it=0; deadline=t0+DUR+2.0

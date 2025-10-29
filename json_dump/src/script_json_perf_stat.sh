@@ -1,56 +1,56 @@
 #!/usr/bin/env bash
-set -e
+# Two runs only: baseline + optimized (orjson)
+# Each run collects perf stat counters (no perf record)
 
+set -euo pipefail
 OUTDIR="${OUTDIR:-FINAL_PERF_STAT_OUT}"
 mkdir -p "$OUTDIR"
 
-# Common event set for deeper analysis
-EVENTS="cycles,instructions,branches,branch-misses,cache-references,cache-misses,\
-L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses,context-switches,\
-cpu-migrations,page-faults"
+echo "🧩 Ensuring dependencies..."
+python3 -m pip install --quiet pyperformance==1.13.0 pyperf==2.9.0 psutil==7.1.2 || true
+if ! python3 -c "import orjson" >/dev/null 2>&1; then
+  echo "🧩 Installing orjson (binary build)..."
+  python3 -m pip install --no-cache-dir --prefer-binary orjson==3.10.7 --quiet || true
+fi
 
+EVENTS="cycles,instructions,branches,branch-misses,cache-misses"
+export PYTHONUNBUFFERED=1
+export MALLOC_ARENA_MAX=2
+
+# === 1) BASELINE (stdlib json) ===
 echo "=== BASELINE: stdlib json ==="
+perf stat -e "$EVENTS" -o "$OUTDIR/perf_stat_baseline.txt" -- \
+  python3 -m pyperformance run -b json_dumps \
+  --inherit-environ PYPERFORMANCE_RUNID \
+  --output "$OUTDIR/json_baseline.json"
 
-# 1️⃣ perf stat with extended counters
-perf stat -e "$EVENTS" \
-    -o "$OUTDIR/perf_stat_baseline.txt" \
-    python3-dbg -m pyperformance run --bench json_dumps
-
-# 2️⃣ perf record + report for call stacks
-perf record -F 999 -g -o "$OUTDIR/perf_baseline.data" -- \
-    python3-dbg -m pyperformance run --bench json_dumps
-perf report --stdio -i "$OUTDIR/perf_baseline.data" > "$OUTDIR/perf_baseline_report.txt"
-
-echo
+# === 2) OPTIMIZED (orjson patch) ===
 echo "=== OPTIMIZED: orjson ==="
-
-# Ensure orjson is available
-sudo python3-dbg -m pip install --user orjson >/dev/null 2>&1 || true
-
-# Monkey-patch json.dumps to use orjson.dumps
 PATCHDIR=$(mktemp -d)
 cat > "$PATCHDIR/sitecustomize.py" <<'PY'
-import json
+import json, sys
 try:
     import orjson
     json.dumps = lambda obj, *a, **kw: orjson.dumps(obj).decode("utf-8")
+    print("[sitecustomize] orjson patch active", file=sys.stderr)
 except Exception as e:
-    import sys
-    print("[sitecustomize] orjson patch failed:", e, file=sys.stderr)
+    print(f"[sitecustomize] orjson patch failed: {e}", file=sys.stderr)
 PY
-export PYTHONPATH="$PATCHDIR"
+export PYTHONPATH="$PATCHDIR:${PYTHONPATH:-}"
 
-# 3️⃣ perf stat (with extended counters) for optimized run
-perf stat -e "$EVENTS" \
-    -o "$OUTDIR/perf_stat_orjson.txt" \
-    python3-dbg -m pyperformance run --bench json_dumps --inherit-environ=PYTHONPATH
+# 🩹 detect venv path (pyperformance will reuse the same venv if it exists)
+VENV_DIR=$(find ./venv -type d -name "cpython3.10-*" | head -n1 || true)
+if [[ -n "$VENV_DIR" ]]; then
+  echo "🧩 Ensuring orjson inside venv: $VENV_DIR"
+  "$VENV_DIR/bin/python" -m pip install --no-cache-dir --prefer-binary orjson==3.10.7 --quiet || true
+fi
 
-# 4️⃣ perf record + report for optimized run
-perf record -F 999 -g -o "$OUTDIR/perf_orjson.data" -- \
-    python3-dbg -m pyperformance run --bench json_dumps --inherit-environ=PYTHONPATH
-perf report --stdio -i "$OUTDIR/perf_orjson.data" > "$OUTDIR/perf_orjson_report.txt"
+perf stat -e "$EVENTS" -o "$OUTDIR/perf_stat_orjson.txt" -- \
+  python3 -m pyperformance run -b json_dumps \
+  --inherit-environ PYPERFORMANCE_RUNID,PYTHONPATH \
+  --output "$OUTDIR/json_orjson.json"
 
 echo
-echo "=== DONE ==="
-echo "All outputs are in: $OUTDIR"
-ls -1 "$OUTDIR"
+echo "✅ DONE"
+echo "Results saved under: $OUTDIR"
+ls -1 "$OUTDIR" | grep -E 'json_|perf_' | sed 's/^/  /'
